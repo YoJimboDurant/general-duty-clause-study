@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+title: "General Duty Clause Study"
+message: "If you use this repository, please cite it as below."
+type: software
+authors:
+  - family-names: Durant
+    given-names: James T.
+    orcid: https://orcid.org/0000-0002-3378-7386
+repository-code: https://github.com/YoJimboDurant/general-duty-clause-study
+license: MIT
+version: 0.1.0
+date-released: 2026-03-10
+abstract: >
+  R code for retrieving and analyzing OSHA General Duty Clause
+  (Section 5(a)(1)) citations from the U.S. Department of Labor Open
+  Data API. The project builds a reproducible dataset of citations
+  and applies text analysis and AI-assisted classification to
+  identify hazards, industries, geographic patterns, and referenced
+  consensus standards.
+keywords:
+  - OSHA
+  - General Duty Clause
+  - occupational safety
+  - enforcement data
+  - text analysis
+  - R
