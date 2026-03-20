@@ -27,7 +27,8 @@ vignettes/*.html
 vignettes/*.pdf
 
 # pkgdown
-docs/
+docs/*
+!docs/.gitkeep
 
 # OAuth
 .httr-oauth
@@ -61,7 +62,8 @@ data_intermediate/
 # ==========================================
 # Outputs / Logs / Temp
 # ==========================================
-outputs/
+outputs/*
+!outputs/.gitkeep
 logs/
 tmp/
 temp/
