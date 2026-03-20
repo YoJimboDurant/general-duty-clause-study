@@ -1,14 +1,28 @@
-###############################################################
-# OSHA GENERAL DUTY CLAUSE DATA EXTRACTION FROM DOL CSV/ZIP FILES
 #
-# This script:
-# 1. Downloads bulk CSV or ZIP files from DOL/OSHA
-# 2. Captures reproducibility metadata and SHA-256 hashes
-# 3. Extracts ZIP archives into a local directory
-# 4. Hashes extracted CSVs
-# 5. Loads the CSV file(s)
-# 6. Continues with the existing GDC text collapse + scoring workflow
-###############################################################
+# BUILD GDC_SCORED SOURCE
+#
+# PURPOSE
+# Download, assemble, classify, and export the General Duty Clause source
+# dataset used to create gdc_scored.csv for downstream ingestion to DuckDB.
+#
+# WHEN TO RUN
+# Run this before ingest/01_ingest_gdc_scored.R.
+#
+# INPUTS
+# - DOL general duty source data
+# - supporting metadata and regex classification logic in this script
+#
+# OUTPUTS
+# - data_clean/gdc_scored.csv
+#
+# NOTES
+# - This is a prep-layer script, not a DuckDB ingest script
+# - It creates the flat file that will later be loaded into DuckDB
+# - This is pipeline step 1 for the GDC lane
+#
+
+source("R/config.R")
+ensure_project_dirs_x()
 
 library(httr2)
 library(dplyr)
@@ -23,25 +37,24 @@ library(janitor)
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
-###############################################################
-# Configuration
-###############################################################
 
-dir_create("data_raw")
-dir_create("data_raw/dol_downloads")
-dir_create("data_raw/dol_extract")
-dir_create("data_clean")
+# Configuration -----------------------------------------------------------
 
 source_files_dfx <- tibble::tribble(
   ~dataset_name,            ~url,
   "violation_gen_duty_std", "https://data.dol.gov/data-catalog/OSHA/violation_gen_duty_std/OSHA_violation_gen_duty_std.zip"
 )
 
-provenance_file_x <- "data_raw/source_file_manifest.csv"
+provenance_file_x        <- file.path(dir_data_raw_x,   "source_file_manifest.csv")
+gdc_lines_raw_path_x     <- file.path(dir_data_raw_x,   "gdc_lines_raw.csv")
+gdc_citations_csv_path_x <- file.path(dir_data_clean_x, "gdc_citations_text.csv")
+gdc_scored_csv_path_x    <- file.path(dir_data_clean_x, "gdc_scored.csv")
+gdc_citations_rds_path_x <- file.path(dir_data_clean_x, "gdc_citations_dfx.rds")
+gdc_scored_rds_path_x    <- file.path(dir_data_clean_x, "gdc_scored_dfx.rds")
+gdc_bundle_rds_path_x    <- file.path(dir_data_clean_x, "gdc_data_clean.rds")
 
-###############################################################
-# Helpers
-###############################################################
+
+# Helpers -----------------------------------------------------------------
 
 compute_sha256_x <- function(path_x) {
   if (!file.exists(path_x)) {
@@ -105,7 +118,7 @@ safe_download_file_x <- function(url_x, dest_path_x, overwrite_x = FALSE) {
 
 
 download_bulk_files_x <- function(source_files_dfx,
-                                  download_dir_x = "data_raw/dol_downloads",
+                                  download_dir_x = dir_dol_downloads_x,
                                   overwrite_x = FALSE) {
   
   manifest_dfx <- source_files_dfx |>
@@ -153,7 +166,7 @@ download_bulk_files_x <- function(source_files_dfx,
 
 
 extract_archives_x <- function(download_manifest_dfx,
-                               extract_dir_x = "data_raw/dol_extract",
+                               extract_dir_x = dir_dol_extract_x,
                                overwrite_x = FALSE) {
   
   extracted_dfx <- purrr::pmap_dfr(
@@ -222,7 +235,7 @@ extract_archives_x <- function(download_manifest_dfx,
 
 write_provenance_manifest_x <- function(download_manifest_dfx,
                                         extracted_manifest_dfx,
-                                        provenance_file_x = "data_raw/source_file_manifest.csv") {
+                                        provenance_file_x = provenance_file_x) {
   
   archive_manifest_dfx <- download_manifest_dfx |>
     mutate(record_type = "downloaded_archive") |>
@@ -300,22 +313,20 @@ read_bulk_csvs_x <- function(csv_manifest_dfx,
   purrr::map_dfr(
     csv_manifest_dfx$extracted_path,
     function(path_x) {
-      
       message("Reading: ", path_x)
       
       readr::read_csv(
         path_x,
         guess_max = guess_max_x,
         show_col_types = FALSE
-      ) %>%
+      ) |>
         janitor::clean_names()
     }
   )
 }
 
-###############################################################
-# Load GDC lines from bulk file(s)
-###############################################################
+
+# Load GDC Lines from Bulk Files ------------------------------------------
 
 load_gdc_lines_from_bulk_x <- function(extracted_manifest_dfx) {
   
@@ -343,11 +354,11 @@ load_gdc_lines_from_bulk_x <- function(extracted_manifest_dfx) {
   gdc_lines_dfx
 }
 
-###############################################################
-# Collapse line-based data into one narrative per citation
-###############################################################
+
+# Collapse Line-Based Data ------------------------------------------------
 
 collapse_gdc_lines_x <- function(gdc_lines_dfx) {
+  
   gdc_lines_dfx |>
     mutate(
       line_nr = suppressWarnings(as.integer(line_nr)),
@@ -359,35 +370,40 @@ collapse_gdc_lines_x <- function(gdc_lines_dfx) {
     summarise(
       citation_text = stringr::str_c(line_text, collapse = " "),
       n_lines = n(),
-      load_dt = dplyr::first(na.omit(load_dt)) %||% NA_character_,
+      load_dt = {
+        load_dt_non_missing_x <- na.omit(load_dt)
+        if (length(load_dt_non_missing_x) == 0) NA_character_ else load_dt_non_missing_x[[1]]
+      },
       .groups = "drop"
-    )
+    ) |>
+    mutate(
+      row_id = dplyr::row_number(),
+      citation_key = paste(activity_nr, citation_id, sep = "_")
+    ) |>
+    relocate(row_id, citation_key, .before = activity_nr)
 }
 
-###############################################################
-# Regex patterns
-###############################################################
+
+# Regex Patterns ----------------------------------------------------------
 
 gdc_ref_rx <- "(?i)\\b(?:section\\s*)?5\\s*\\(?a\\)?\\s*[-–—:/;, ]*\\(?1\\)?\\b|\\b5a1\\b|\\b29\\s*(?:u\\.?s\\.?c\\.?|usc)\\s*654\\s*\\(?a\\)?\\s*\\(?1\\)?\\b|\\b654\\s*\\(?a\\)?\\s*\\(?1\\)?\\b"
 
 osha_std_rx <- "(?i)\\b29\\s*cfr\\s*(?:1910|1926|1915|1917|1918|1904|1903)\\.[0-9]"
 
-###############################################################
-# Text normalization
-###############################################################
+
+# Text Normalization ------------------------------------------------------
 
 normalize_gdc_text_fx <- function(text_x) {
-  text_x %>%
-    dplyr::coalesce("") %>%
-    stringr::str_replace_all("[\r\n\t]+", " ") %>%
-    stringr::str_replace_all("[[:punct:]]+", " ") %>%
-    stringr::str_squish() %>%
+  text_x |>
+    dplyr::coalesce("") |>
+    stringr::str_replace_all("[\r\n\t]+", " ") |>
+    stringr::str_replace_all("[[:punct:]]+", " ") |>
+    stringr::str_squish() |>
     stringr::str_to_lower()
 }
 
-###############################################################
-# Scoring function
-###############################################################
+
+# Scoring Function --------------------------------------------------------
 
 score_gdc_fx <- function(text_x) {
   
@@ -414,9 +430,8 @@ score_gdc_fx <- function(text_x) {
   score_x
 }
 
-###############################################################
-# Main workflow
-###############################################################
+
+# Main Workflow -----------------------------------------------------------
 
 download_manifest_dfx <- download_bulk_files_x(
   source_files_dfx = source_files_dfx,
@@ -436,11 +451,11 @@ provenance_dfx <- write_provenance_manifest_x(
 
 gdc_lines_dfx <- load_gdc_lines_from_bulk_x(extracted_manifest_dfx)
 
-write_csv(gdc_lines_dfx, "data_raw/gdc_lines_raw.csv")
+write_csv(gdc_lines_dfx, gdc_lines_raw_path_x)
 
 gdc_citations_dfx <- collapse_gdc_lines_x(gdc_lines_dfx)
 
-gdc_scored_dfx <- gdc_citations_dfx %>%
+gdc_scored_dfx <- gdc_citations_dfx |>
   mutate(
     text_norm = normalize_gdc_text_fx(citation_text),
     gdc_score = purrr::map_dbl(citation_text, score_gdc_fx),
@@ -448,21 +463,27 @@ gdc_scored_dfx <- gdc_citations_dfx %>%
       gdc_score >= 6 ~ "probable_gdc",
       gdc_score >= 4 ~ "possible_gdc",
       TRUE ~ "unlikely_gdc"
-    )
+    ),
+    is_probable_gdc = gdc_bucket == "probable_gdc",
+    is_possible_gdc = gdc_bucket == "possible_gdc",
+    is_gdc_candidate = gdc_bucket %in% c("probable_gdc", "possible_gdc")
   )
 
-gdc_probable_dfx <- gdc_scored_dfx %>%
-  filter(gdc_bucket == "probable_gdc")
+gdc_probable_dfx <- gdc_scored_dfx |>
+  filter(is_probable_gdc)
 
-gdc_possible_dfx <- gdc_scored_dfx %>%
-  filter(gdc_bucket == "possible_gdc")
+gdc_possible_dfx <- gdc_scored_dfx |>
+  filter(is_possible_gdc)
 
-gdc_unlikely_dfx <- gdc_scored_dfx %>%
+gdc_unlikely_dfx <- gdc_scored_dfx |>
   filter(gdc_bucket == "unlikely_gdc")
 
-write_csv(gdc_citations_dfx, "data_clean/gdc_citations_text.csv")
-write_csv(gdc_scored_dfx, "data_clean/gdc_scored.csv")
-write_csv(provenance_dfx, "data_raw/source_file_manifest.csv")
+write_csv(gdc_citations_dfx, gdc_citations_csv_path_x)
+write_csv(gdc_scored_dfx, gdc_scored_csv_path_x)
+write_csv(provenance_dfx, provenance_file_x)
+
+saveRDS(gdc_citations_dfx, file = gdc_citations_rds_path_x)
+saveRDS(gdc_scored_dfx, file = gdc_scored_rds_path_x)
 
 saveRDS(
   list(
@@ -473,8 +494,5 @@ saveRDS(
     gdc_possible_dfx = gdc_possible_dfx,
     gdc_unlikely_dfx = gdc_unlikely_dfx
   ),
-  file = "data_clean/gdc_data_clean.rds"
+  file = gdc_bundle_rds_path_x
 )
-
-message("Done.")
-
