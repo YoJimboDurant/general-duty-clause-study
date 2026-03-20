@@ -41,7 +41,7 @@ chunk_dir_x       <- file.path(queue_dir_x, "chunks")
 master_queue_x    <- file.path(queue_dir_x, "gdc_llm_queue_master.csv")
 chunk_manifest_x  <- file.path(queue_dir_x, "gdc_llm_chunk_manifest.csv")
 
-prompt_version_x  <- "gdc_extraction_v1"
+prompt_version_x  <- "gdc_extraction_v2"
 chunk_size_x      <- 500L
 
 
