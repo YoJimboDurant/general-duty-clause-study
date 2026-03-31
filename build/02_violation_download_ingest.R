@@ -1,3 +1,6 @@
+source("R/config.R")
+source("R/utils_duckdb.R")
+
 library(DBI)
 library(duckdb)
 library(fs)
@@ -114,20 +117,25 @@ length(list.files(extract_dir_x, pattern = "\\.csv$", recursive = TRUE))
 # ============================================
 
 # Define DuckDB directory + file
-duckdb_dir_x <- file.path(project_root_x, "data_clean", "duckdb")
-dir.create(duckdb_dir_x, recursive = TRUE, showWarnings = FALSE)
 
-db_path_x <- file.path(duckdb_dir_x, "osha_gdc.duckdb")
+ensure_project_dirs_x()
 
 # Connect to DuckDB
-con <- dbConnect(
-  duckdb::duckdb(),
-  dbdir = db_path_x,
-  read_only = FALSE
-)
+
+con_x <- connect_duckdb_x()
+
+
+on.exit({
+  try(DBI::dbDisconnect(con_x, shutdown = TRUE), silent = TRUE)
+}, add = TRUE)
+
+
+
+
+
 
 # Confirm connection
-dbGetQuery(con, "SELECT 'DuckDB connected' AS status")
+dbGetQuery(con_x, "SELECT 'DuckDB connected' AS status")
 
 
 
@@ -178,7 +186,7 @@ first_csv_x <- normalizePath(csv_paths_x[1], winslash = "/")
 cat(read_lines(first_csv_x, n_max = 3), sep = "\n")
 
 schema_dfx <- dbGetQuery(
-  con,
+  con_x,
   sprintf("
     DESCRIBE
     SELECT *
@@ -189,7 +197,7 @@ schema_dfx <- dbGetQuery(
 print(schema_dfx)
 
 rowcount_dfx <- dbGetQuery(
-  con,
+  con_x,
   sprintf("
     SELECT COUNT(*) AS n_rows
     FROM read_csv_auto('%s', HEADER = TRUE, SAMPLE_SIZE = 200000)
@@ -205,8 +213,8 @@ print(rowcount_dfx)
 
 
 # Start fresh
-dbExecute(con, "DROP TABLE IF EXISTS violation_raw")
-dbExecute(con, "DROP TABLE IF EXISTS violation_csv_rejects_all")
+dbExecute(con_x, "DROP TABLE IF EXISTS violation_raw")
+dbExecute(con_x, "DROP TABLE IF EXISTS violation_csv_rejects_all")
 
 #-------------------------------------------
 # 8A — CREATE EMPTY TARGET TABLE
@@ -215,7 +223,7 @@ dbExecute(con, "DROP TABLE IF EXISTS violation_csv_rejects_all")
 first_csv_x <- normalizePath(csv_paths_x[1], winslash = "/")
 
 dbExecute(
-  con,
+  con_x,
   sprintf("
     CREATE TABLE violation_raw AS
     SELECT *
@@ -230,7 +238,7 @@ dbExecute(
 
 # Table to accumulate reject metadata
 dbExecute(
-  con,
+  con_x,
   "
   CREATE TABLE violation_csv_rejects_all (
     file_path VARCHAR,
@@ -253,14 +261,14 @@ for (i_x in seq_along(csv_paths_x)) {
   message(sprintf("[%s/%s] Loading %s", i_x, length(csv_paths_x), basename(file_x)))
   
   # clean per-file rejects tables if they exist
-  dbExecute(con, "DROP TABLE IF EXISTS violation_csv_rejects")
-  dbExecute(con, "DROP TABLE IF EXISTS violation_csv_reject_scans")
-  dbExecute(con, "DROP TABLE IF EXISTS violation_stage")
+  dbExecute(con_x, "DROP TABLE IF EXISTS violation_csv_rejects")
+  dbExecute(con_x, "DROP TABLE IF EXISTS violation_csv_reject_scans")
+  dbExecute(con_x, "DROP TABLE IF EXISTS violation_stage")
   
   # stage this file
   
   dbExecute(
-    con,
+    con_x,
     sprintf("
     CREATE TABLE violation_stage AS
     SELECT *
@@ -281,14 +289,14 @@ for (i_x in seq_along(csv_paths_x)) {
   )
   
   # append staged rows
-  dbExecute(con, "
+  dbExecute(con_x, "
     INSERT INTO violation_raw
     SELECT * FROM violation_stage
   ")
   
   # append rejects, if any
   reject_exists_x <- dbGetQuery(
-    con,
+    con_x,
     "
     SELECT COUNT(*) AS n
     FROM information_schema.tables
@@ -298,7 +306,7 @@ for (i_x in seq_along(csv_paths_x)) {
   
   if (reject_exists_x > 0) {
     dbExecute(
-      con,
+      con_x,
       sprintf("
         INSERT INTO violation_csv_rejects_all
         SELECT
@@ -310,12 +318,12 @@ for (i_x in seq_along(csv_paths_x)) {
       ", file_x)
     )
     
-    reject_n_x <- dbGetQuery(con, "SELECT COUNT(*) AS n FROM violation_csv_rejects")$n[1]
+    reject_n_x <- dbGetQuery(con_x, "SELECT COUNT(*) AS n FROM violation_csv_rejects")$n[1]
   } else {
     reject_n_x <- 0
   }
   
-  loaded_n_x <- dbGetQuery(con, "SELECT COUNT(*) AS n FROM violation_stage")$n[1]
+  loaded_n_x <- dbGetQuery(con_x, "SELECT COUNT(*) AS n FROM violation_stage")$n[1]
   
   load_results_lx[[i_x]] <- tibble(
     file_path_x = file_x,
@@ -334,17 +342,17 @@ print(load_results_dfx)
 ############################################
 
 violation_rowcount_dfx <- dbGetQuery(
-  con,
+  con_x,
   "SELECT COUNT(*) AS n_rows FROM violation_raw"
 )
 
 reject_count_dfx <- dbGetQuery(
-  con,
+  con_x,
   "SELECT COUNT(*) AS n_rejects FROM violation_csv_rejects_all"
 )
 
 violation_schema_dfx <- dbGetQuery(
-  con,
+  con_x,
   "DESCRIBE violation_raw"
 )
 
@@ -353,7 +361,7 @@ print(reject_count_dfx)
 print(violation_schema_dfx)
 
 reject_examples_dfx <- dbGetQuery(
-  con,
+  con_x,
   "
   SELECT *
   FROM violation_csv_rejects_all
@@ -367,7 +375,7 @@ print(reject_examples_dfx, n = 50)
 # ============================================
 
 print(
-  dbGetQuery(con, "
+  dbGetQuery(con_x, "
     SELECT standard, COUNT(*) AS n
     FROM violation_raw
     GROUP BY standard
@@ -377,7 +385,7 @@ print(
 )
 
 print(
-  dbGetQuery(con, "
+  dbGetQuery(con_x, "
     SELECT *
     FROM violation_raw
     WHERE standard = '5A0001'
@@ -387,12 +395,12 @@ print(
 
 
 rejects_dfx <- dbGetQuery(
-  con,
+  con_x,
   "
   SELECT *
   FROM violation_csv_rejects_all
   ORDER BY file_path, line_number
   "
 )
-
-dbDisconnect(con, shutdown = TRUE)
+ 
+dbDisconnect(con_x, shutdown = TRUE)

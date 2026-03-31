@@ -1,3 +1,6 @@
+source("R/config.R")
+source("R/utils_duckdb.R")
+
 library(DBI)
 library(duckdb)
 library(dplyr)
@@ -12,12 +15,6 @@ library(tibble)
 
 project_root_x <- "C:/Users/JamesDurant/general-duty-clause-study"
 
-db_path_x <- file.path(
-  project_root_x,
-  "data_clean",
-  "duckdb",
-  "osha_gdc.duckdb"
-)
 
 gdc_file_x <- file.path(
   project_root_x,
@@ -119,11 +116,9 @@ if (length(missing_cols_x) > 0) {
 # SECTION 6 — CONNECT TO DUCKDB
 ############################################
 
-con_x <- DBI::dbConnect(
-  duckdb::duckdb(),
-  dbdir = db_path_x,
-  read_only = FALSE
-)
+ensure_project_dirs_x()
+con_x <- connect_duckdb_x()
+
 
 on.exit({
   try(DBI::dbDisconnect(con_x, shutdown = TRUE), silent = TRUE)

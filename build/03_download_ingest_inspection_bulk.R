@@ -12,12 +12,12 @@ library(stringr)
 # SECTION 1 — PATHS
 ############################################
 
-project_root_x <- "C:/Users/JamesDurant/general-duty-clause-study"
+project_root_x  <- getwd()
 
 download_dir_x <- file.path(project_root_x, "data_raw", "dol_downloads")
 extract_dir_x  <- file.path(project_root_x, "data_raw", "dol_extract", "inspection")
 db_dir_x       <- file.path(project_root_x, "data_clean", "duckdb")
-db_path_x      <- file.path(db_dir_x, "osha_gdc.duckdb")
+db_path_x      <- file.path(db_dir_x, "osha.duckdb")
 
 # Bulk ZIP pattern is consistent with the OSHA DOL catalog bulk files you already used.
 # If DOL ever changes the filename, this is the one line you should update.
@@ -163,8 +163,7 @@ schema_preview_dfx <- suppressMessages(
     col_types = readr::cols(.default = readr::col_character()),
     progress = FALSE,
     show_col_types = FALSE,
-    quote = "\"",
-    escape_double = TRUE
+    quote = "\""
   )
 ) |>
   names() |>
@@ -452,5 +451,5 @@ INNER JOIN violation_raw v
 "
 )
 
-
+DBI::dbListTables(con_x)
 dbDisconnect(con_x, shutdown = TRUE)
